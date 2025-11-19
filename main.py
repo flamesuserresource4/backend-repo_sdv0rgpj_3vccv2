@@ -103,61 +103,7 @@ class JobStatus(BaseModel):
     error: Optional[str] = None
 
 
-# -------------------- URL Auto Validation --------------------
-@app.post("/api/validate-url", response_model=URLCheckResponse)
-async def validate_url(payload: URLCheckRequest):
-    url = str(payload.url)
-
-    # Basic extension support check
-    supported_ext = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]
-    if not any(url.lower().split("?")[0].endswith(ext) for ext in supported_ext):
-        # Try a HEAD to see if it's a media content-type even without extension
-        pass
-
-    try:
-        # Prefer HEAD to avoid downloading
-        head = requests.head(url, allow_redirects=True, timeout=8)
-        ct = head.headers.get("Content-Type", "").lower()
-        cl = head.headers.get("Content-Length")
-
-        # If HEAD not allowed, fall back to GET with stream and small timeout
-        if head.status_code >= 400 or (not ct and not cl):
-            get = requests.get(url, stream=True, allow_redirects=True, timeout=10)
-            ct = get.headers.get("Content-Type", "").lower()
-            cl = get.headers.get("Content-Length")
-            status = get.status_code
-        else:
-            status = head.status_code
-
-        # Validate status and content-type
-        if status >= 400:
-            return URLCheckResponse(ok=False, reason=f"HTTP {status}: Unreachable or requires auth")
-
-        is_video = any(x in ct for x in ["video/", "application/octet-stream"]) or any(
-            url.lower().split("?")[0].endswith(ext) for ext in supported_ext
-        )
-
-        if not is_video:
-            return URLCheckResponse(ok=False, reason=f"Unsupported content-type: {ct or 'unknown'}")
-
-        return URLCheckResponse(
-            ok=True,
-            reason=None,
-            content_type=ct or None,
-            content_length=int(cl) if cl and cl.isdigit() else None
-        )
-
-    except requests.exceptions.SSLError:
-        return URLCheckResponse(ok=False, reason="SSL error - site misconfigured or blocked")
-    except requests.exceptions.ConnectTimeout:
-        return URLCheckResponse(ok=False, reason="Connection timed out")
-    except requests.exceptions.ReadTimeout:
-        return URLCheckResponse(ok=False, reason="Read timed out")
-    except requests.exceptions.RequestException as e:
-        return URLCheckResponse(ok=False, reason=f"Request error: {str(e)[:120]}")
-
-
-# -------------------- YouTube Extraction Layer --------------------
+# -------------------- YouTube helpers (declared early for reuse) --------------------
 from pydantic import BaseModel as _BaseModel
 
 class ExtractedMedia(_BaseModel):
@@ -237,6 +183,64 @@ class IngestResult(_BaseModel):
     status: str
     validation: Dict
     extracted: Optional[ExtractedMedia] = None
+
+
+# -------------------- URL Auto Validation --------------------
+@app.post("/api/validate-url", response_model=URLCheckResponse)
+async def validate_url(payload: URLCheckRequest):
+    url = str(payload.url)
+
+    # If it's a YouTube page, return ok and let the ingest step extract the real stream
+    if _is_youtube(url):
+        return URLCheckResponse(ok=True, reason=None, content_type="text/html; youtube", content_length=None)
+
+    # Basic extension support check
+    supported_ext = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]
+    if not any(url.lower().split("?")[0].endswith(ext) for ext in supported_ext):
+        # Try a HEAD to see if it's a media content-type even without extension
+        pass
+
+    try:
+        # Prefer HEAD to avoid downloading
+        head = requests.head(url, allow_redirects=True, timeout=8)
+        ct = head.headers.get("Content-Type", "").lower()
+        cl = head.headers.get("Content-Length")
+
+        # If HEAD not allowed, fall back to GET with stream and small timeout
+        if head.status_code >= 400 or (not ct and not cl):
+            get = requests.get(url, stream=True, allow_redirects=True, timeout=10)
+            ct = get.headers.get("Content-Type", "").lower()
+            cl = get.headers.get("Content-Length")
+            status = get.status_code
+        else:
+            status = head.status_code
+
+        # Validate status and content-type
+        if status >= 400:
+            return URLCheckResponse(ok=False, reason=f"HTTP {status}: Unreachable or requires auth")
+
+        is_video = any(x in ct for x in ["video/", "application/octet-stream"]) or any(
+            url.lower().split("?")[0].endswith(ext) for ext in supported_ext
+        )
+
+        if not is_video:
+            return URLCheckResponse(ok=False, reason=f"Unsupported content-type: {ct or 'unknown'}")
+
+        return URLCheckResponse(
+            ok=True,
+            reason=None,
+            content_type=ct or None,
+            content_length=int(cl) if cl and cl.isdigit() else None
+        )
+
+    except requests.exceptions.SSLError:
+        return URLCheckResponse(ok=False, reason="SSL error - site misconfigured or blocked")
+    except requests.exceptions.ConnectTimeout:
+        return URLCheckResponse(ok=False, reason="Connection timed out")
+    except requests.exceptions.ReadTimeout:
+        return URLCheckResponse(ok=False, reason="Read timed out")
+    except requests.exceptions.RequestException as e:
+        return URLCheckResponse(ok=False, reason=f"Request error: {str(e)[:120]}")
 
 
 # -------------------- Jobs: create + status (stub processors) --------------------
