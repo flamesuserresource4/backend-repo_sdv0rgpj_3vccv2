@@ -157,8 +157,91 @@ async def validate_url(payload: URLCheckRequest):
         return URLCheckResponse(ok=False, reason=f"Request error: {str(e)[:120]}")
 
 
+# -------------------- YouTube Extraction Layer --------------------
+from pydantic import BaseModel as _BaseModel
+
+class ExtractedMedia(_BaseModel):
+    ok: bool
+    url: Optional[str] = None
+    container: Optional[str] = None
+    has_audio: Optional[bool] = None
+    has_video: Optional[bool] = None
+    duration: Optional[float] = None
+    resolution: Optional[str] = None
+    audio_codec: Optional[str] = None
+    video_codec: Optional[str] = None
+    reason: Optional[str] = None
+
+
+def _is_youtube(url: str) -> bool:
+    u = url.lower()
+    return any(domain in u for domain in ["youtube.com/watch", "youtu.be/", "youtube.com/shorts"]) \
+        or ("youtube.com" in u and "v=" in u)
+
+
+def _extract_youtube_stream(url: str) -> ExtractedMedia:
+    """Use yt-dlp to resolve YouTube webpage to direct media URLs.
+    We pick the best mp4/webm with both audio+video (progressive) when available.
+    """
+    try:
+        import yt_dlp  # type: ignore
+    except Exception as e:
+        return ExtractedMedia(ok=False, reason=f"yt-dlp not installed: {e}")
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "format": "best[ext=mp4][acodec!=none][vcodec!=none]/best[ext=webm][acodec!=none][vcodec!=none]/best",
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            # Try formats list for direct media URL
+            fmts = info.get("formats") or []
+            progressive = [f for f in fmts if f.get("acodec") != "none" and f.get("vcodec") != "none" and f.get("url")]
+            # Prefer mp4 then webm
+            progressive.sort(key=lambda f: (0 if f.get("ext") == "mp4" else 1, -(f.get("height") or 0)))
+            chosen = progressive[0] if progressive else None
+
+            if not chosen:
+                # Try besturl fallback
+                chosen_url = info.get("url")
+                if not chosen_url:
+                    return ExtractedMedia(ok=False, reason="No playable stream found")
+                chosen = {"url": chosen_url, "ext": info.get("ext"), "acodec": info.get("acodec"), "vcodec": info.get("vcodec"), "height": info.get("height")}
+
+            duration = info.get("duration")
+            height = chosen.get("height") or info.get("height")
+            width = chosen.get("width") or info.get("width")
+            resolution = f"{width or ''}x{height or ''}" if width and height else (f"{height}p" if height else None)
+
+            return ExtractedMedia(
+                ok=True,
+                url=chosen.get("url"),
+                container=chosen.get("ext"),
+                has_audio=(chosen.get("acodec") != "none"),
+                has_video=(chosen.get("vcodec") != "none"),
+                duration=float(duration) if duration else None,
+                resolution=resolution,
+                audio_codec=chosen.get("acodec") or info.get("acodec"),
+                video_codec=chosen.get("vcodec") or info.get("vcodec"),
+            )
+    except Exception as e:
+        return ExtractedMedia(ok=False, reason=f"Extraction failed: {str(e)[:200]}")
+
+
+class IngestResult(_BaseModel):
+    video_id: str
+    status: str
+    validation: Dict
+    extracted: Optional[ExtractedMedia] = None
+
+
 # -------------------- Jobs: create + status (stub processors) --------------------
 from bson import ObjectId
+
 
 def _now_ts():
     return datetime.now(timezone.utc)
@@ -426,6 +509,21 @@ class UploadURLRequest(BaseModel):
 async def ingest_by_url(payload: UploadURLRequest):
     # Validate first
     check = await validate_url(URLCheckRequest(url=payload.url))
+
+    # If it's YouTube (text/html), run extraction layer to resolve real media stream
+    extracted: Optional[ExtractedMedia] = None
+    if (not check.ok and "text/html" in (check.content_type or "")) or _is_youtube(str(payload.url)):
+        extracted = _extract_youtube_stream(str(payload.url))
+        if not extracted.ok:
+            raise HTTPException(status_code=400, detail=f"YouTube extraction failed: {extracted.reason}")
+        # Force success with media details replacing HTML response
+        check = URLCheckResponse(
+            ok=True,
+            reason=None,
+            content_type=f"video/{extracted.container}" if extracted.container else "video/mp4",
+            content_length=None,
+        )
+
     if not check.ok and not payload.force:
         raise HTTPException(status_code=400, detail=f"Invalid video URL: {check.reason}")
 
@@ -437,10 +535,11 @@ async def ingest_by_url(payload: UploadURLRequest):
         "created_at": _now_ts(),
         "updated_at": _now_ts(),
         "error": None,
+        "extracted": extracted.model_dump() if extracted else None,
     }
     vid = db["video"].insert_one(doc).inserted_id
 
-    return {"video_id": str(vid), "status": "queued", "validation": check.model_dump()}
+    return {"video_id": str(vid), "status": "queued", "validation": check.model_dump(), "extracted": (extracted.model_dump() if extracted else None)}
 
 @app.get("/api/diagnostics/upload")
 async def upload_diagnostics(url: Optional[str] = None):
