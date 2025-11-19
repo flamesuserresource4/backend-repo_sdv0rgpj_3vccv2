@@ -6,3 +6,4 @@ pymongo==4.6.0
 requests==2.31.0
 email-validator==2.1.0
 yt-dlp
+python-multipart>=0.0.9

@@ -158,7 +158,7 @@ def _extract_youtube_stream(url: str, cookie_header: Optional[str] = None) -> Ex
         # Try to reduce interaction with consent pages
         "extractor_args": {
             "youtube": {
-                "player_client": ["android"],  # often bypasses some restrictions
+                "player_client": ["android"],
             }
         },
     }
@@ -571,6 +571,60 @@ async def ingest_by_url(payload: UploadURLRequest):
     vid = db["video"].insert_one(doc).inserted_id
 
     return {"video_id": str(vid), "status": "queued", "validation": check.model_dump(), "extracted": (extracted.model_dump() if extracted else None)}
+
+@app.post("/api/ingest/upload")
+async def ingest_by_upload(file: UploadFile = File(...), category: Optional[str] = Form(None)):
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
+    uploads_dir = "/tmp/uploads"
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    original_name = file.filename or "upload.bin"
+    ext = os.path.splitext(original_name)[1] or ".bin"
+    ts = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    safe_ext = ext if len(ext) <= 8 else ext[:8]
+    fname = f"upload_{ts}{safe_ext}"
+    full_path = os.path.join(uploads_dir, fname)
+
+    size = 0
+    try:
+        with open(full_path, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                f.write(chunk)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save upload: {str(e)[:120]}")
+
+    doc = {
+        "source_type": "upload",
+        "category": category or "uncategorized",
+        "original_name": original_name,
+        "stored_name": fname,
+        "content_type": file.content_type,
+        "size_bytes": size,
+        "path": full_path,
+        "status": "pending",
+        "created_at": _now_ts(),
+        "updated_at": _now_ts(),
+        "error": None,
+        "extracted": None,
+    }
+    vid = db["video"].insert_one(doc).inserted_id
+
+    return {
+        "video_id": str(vid),
+        "status": "queued",
+        "upload": {
+            "category": doc["category"],
+            "original_name": original_name,
+            "size_bytes": size,
+            "content_type": file.content_type,
+        }
+    }
 
 @app.get("/api/diagnostics/upload")
 async def upload_diagnostics(url: Optional[str] = None):
