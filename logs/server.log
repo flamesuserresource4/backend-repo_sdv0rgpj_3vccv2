@@ -1,10 +1,12 @@
 INFO:     Will watch for changes in these directories: ['/home/workspace']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [915] using StatReload
-INFO:     Started server process [917]
+INFO:     Started reloader process [964] using StatReload
+INFO:     Started server process [966]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     172.20.0.1:51774 - "HEAD / HTTP/1.1" 405 Method Not Allowed
-INFO:     172.20.0.1:44908 - "POST /api/validate-url HTTP/1.1" 200 OK
+INFO:     172.20.0.1:36656 - "HEAD / HTTP/1.1" 405 Method Not Allowed
+INFO:     172.20.0.1:42116 - "OPTIONS /api/ingest/url HTTP/1.1" 200 OK
 ERROR: [youtube] u7kdVe8q5zs: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies
-INFO:     172.20.0.1:44908 - "POST /api/ingest/url HTTP/1.1" 400 Bad Request
+INFO:     172.20.0.1:42116 - "POST /api/ingest/url HTTP/1.1" 400 Bad Request
+ERROR: [youtube] u7kdVe8q5zs: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies
+INFO:     172.20.0.1:42118 - "POST /api/ingest/url HTTP/1.1" 400 Bad Request
