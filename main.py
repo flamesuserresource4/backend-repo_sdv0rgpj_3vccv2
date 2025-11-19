@@ -88,6 +88,10 @@ class JobCreate(BaseModel):
         "color_enhancement",
         "subtitle_style_apply",
         "export_profile",
+        # New high-level tools
+        "clip_cutter",
+        "dopamine_story",
+        "ai_script_writer",
     ]
     video_id: Optional[str] = None
     params: Dict = {}
@@ -327,7 +331,87 @@ def _process_job(job_type: str, params: Dict) -> Dict:
             "youtube_balanced": {"bitrate": "6Mbps", "resolution": "1080x1920", "codec": "h264", "crf": 24},
             "archive_high": {"bitrate": "12Mbps", "resolution": "1080x1920", "codec": "h265", "crf": 20},
         }
+            
         return {"profile": profile, "settings": mapping.get(profile, mapping["tiktok_compressed"])}
+
+    # High-level tools
+    if job_type == "clip_cutter":
+        # Expect params: {"target_duration_s": ~40, "font": "Inter", "platforms": ["tiktok","youtube_shorts","instagram_reels"] }
+        target = int(params.get("target_duration_s", 40))
+        narration_lines = [
+            "Hook them in the first second.",
+            "Fast cuts. Big action.",
+            "Say the punchline. Move on.",
+            "End on a peak."
+        ]
+        subtitles = [{"t_start": i* (target//len(narration_lines)), "t_end": (i+1)*(target//len(narration_lines)) - 0.2, "text": line} for i, line in enumerate(narration_lines)]
+        platforms = params.get("platforms", ["tiktok", "youtube_shorts", "instagram_reels"]) 
+        exports = {p: {"url": f"https://example.com/exports/clip_cutter/{p}/{target}s.mp4", "format": "mp4"} for p in platforms}
+        timeline_ops = [
+            {"action": "trim", "from": 0.0, "to": target},
+            {"action": "silence_remove", "removed_segments": [[5.2, 6.0], [18.1, 18.9]]},
+            {"action": "weak_frame_drop", "count": 42},
+            {"action": "stabilize", "mode": "auto"},
+            {"action": "audio_balance", "lufs": -14.0}
+        ]
+        return {
+            "final_duration_s": target,
+            "timeline": timeline_ops,
+            "narration": narration_lines,
+            "subtitles": subtitles,
+            "exports": exports,
+        }
+
+    if job_type == "dopamine_story":
+        # Expect params: {"style": "reddit", "beats": 8, "platform": "tiktok"}
+        beats = int(params.get("beats", 8))
+        style = params.get("style", "reddit")
+        lines = [
+            "I never planned to post this...",
+            "But last night everything changed.",
+            "Short version? I messed up.",
+            "And then it got worse.",
+            "So I made a choice.",
+            "It worked. Too well.",
+            "Now I'm stuck with the truth.",
+            "And you won't believe the ending."
+        ][:beats]
+        loops = [{"start": i*3.5, "end": i*3.5 + 3.0} for i in range(len(lines))]
+        subtitles = [{"t_start": loops[i]["start"], "t_end": loops[i]["end"], "text": lines[i]} for i in range(len(lines))]
+        return {
+            "style": style,
+            "script": lines,
+            "visual_loops": loops,
+            "voice": {"generated": True, "voice_id": "natural_v1"},
+            "subtitles": subtitles,
+            "export": {"platform": params.get("platform", "tiktok"), "url": "https://example.com/exports/dopamine_story/final.mp4"}
+        }
+
+    if job_type == "ai_script_writer":
+        # Expect params: {"topic": str, "tone": str, "max_lines": int}
+        topic = params.get("topic", "unexpected life lesson")
+        tone = params.get("tone", "fast_paced")
+        max_lines = int(params.get("max_lines", 10))
+        lines = [
+            f"Here's the setup: {topic}.",
+            "Then a twist hits.",
+            "We face the consequence.",
+            "A bolder choice appears.",
+            "Tension climbs fast.",
+            "We take the leap.",
+            "It pays off.",
+            "One last surprise.",
+            "Lesson lands clean.",
+            "End with momentum."
+        ][:max_lines]
+        return {
+            "topic": topic,
+            "tone": tone,
+            "pacing": "snappy",
+            "beats": len(lines),
+            "script": lines,
+            "estimated_duration_s": len(lines) * 2.5
+        }
 
     # default
     return {"message": "no-op"}
