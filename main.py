@@ -117,6 +117,7 @@ class ExtractedMedia(_BaseModel):
     audio_codec: Optional[str] = None
     video_codec: Optional[str] = None
     reason: Optional[str] = None
+    needs_auth: Optional[bool] = None
 
 
 def _is_youtube(url: str) -> bool:
@@ -125,20 +126,41 @@ def _is_youtube(url: str) -> bool:
         or ("youtube.com" in u and "v=" in u)
 
 
-def _extract_youtube_stream(url: str) -> ExtractedMedia:
+def _extract_youtube_stream(url: str, cookie_header: Optional[str] = None) -> ExtractedMedia:
     """Use yt-dlp to resolve YouTube webpage to direct media URLs.
     We pick the best mp4/webm with both audio+video (progressive) when available.
+    Optionally accepts a raw Cookie header string for bypassing bot checks/age gates.
     """
     try:
         import yt_dlp  # type: ignore
     except Exception as e:
         return ExtractedMedia(ok=False, reason=f"yt-dlp not installed: {e}")
 
+    # Build HTTP headers, including optional Cookie header if provided
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Connection": "keep-alive",
+    }
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "format": "best[ext=mp4][acodec!=none][vcodec!=none]/best[ext=webm][acodec!=none][vcodec!=none]/best",
+        "http_headers": headers,
+        # Try to reduce interaction with consent pages
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android"],  # often bypasses some restrictions
+            }
+        },
     }
 
     try:
@@ -175,7 +197,9 @@ def _extract_youtube_stream(url: str) -> ExtractedMedia:
                 video_codec=chosen.get("vcodec") or info.get("vcodec"),
             )
     except Exception as e:
-        return ExtractedMedia(ok=False, reason=f"Extraction failed: {str(e)[:200]}")
+        msg = str(e)
+        needs_auth = ("Sign in to confirm" in msg) or ("consent" in msg.lower()) or ("cookies" in msg.lower())
+        return ExtractedMedia(ok=False, reason=f"Extraction failed: {msg[:200]}", needs_auth=needs_auth)
 
 
 class IngestResult(_BaseModel):
@@ -508,6 +532,8 @@ def _process_job(job_type: str, params: Dict) -> Dict:
 class UploadURLRequest(BaseModel):
     url: HttpUrl
     force: Optional[bool] = False
+    # Optional raw Cookie header string to bypass YouTube bot/age checks
+    cookie_header: Optional[str] = None
 
 @app.post("/api/ingest/url")
 async def ingest_by_url(payload: UploadURLRequest):
@@ -517,9 +543,10 @@ async def ingest_by_url(payload: UploadURLRequest):
     # If it's YouTube (text/html), run extraction layer to resolve real media stream
     extracted: Optional[ExtractedMedia] = None
     if (not check.ok and "text/html" in (check.content_type or "")) or _is_youtube(str(payload.url)):
-        extracted = _extract_youtube_stream(str(payload.url))
+        extracted = _extract_youtube_stream(str(payload.url), cookie_header=payload.cookie_header)
         if not extracted.ok:
-            raise HTTPException(status_code=400, detail=f"YouTube extraction failed: {extracted.reason}")
+            extra = " | Provide cookie_header from your logged-in browser if this persists." if extracted.needs_auth else ""
+            raise HTTPException(status_code=400, detail=f"YouTube extraction failed: {extracted.reason}{extra}")
         # Force success with media details replacing HTML response
         check = URLCheckResponse(
             ok=True,
